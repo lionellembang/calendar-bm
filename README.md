@@ -34,7 +34,10 @@ identification headers) and the `roleActivity` body — into one replayable file
 (Navigating straight to the LMS schedule URL was unreliable on a cold session —
 it bounced back to BINUSMAYA — so the scraper follows the real UI click-path. It
 also waits for the dashboard to *finish* loading and retries the SSO hand-off,
-since BINUSMAYA's post-login redirect occasionally stalls on the logged-out page.)
+since BINUSMAYA's post-login redirect occasionally stalls on the logged-out page.
+If a whole attempt still can't reach the schedule page, the scraper throws the
+browser away and retries from a cold start — up to `SCRAPE_MAX_ATTEMPTS` times,
+waiting `SCRAPE_RETRY_DELAY_SEC` between tries.)
 
 ## Layout
 
@@ -178,6 +181,8 @@ docker compose exec calendar npm run sync            # run a one-off sync in the
 | `CALENDAR_NAME` | `BINUS Schedule` | base display name; each feed appends its type (e.g. "… — Onsite") |
 | `SYNC_INTERVAL_MINUTES` | `360` | how often to refresh from the API, in minutes |
 | `MONTHS_BACK` / `MONTHS_AHEAD` | `1` / `2` | month window to fetch |
+| `SCRAPE_MAX_ATTEMPTS` | `3` | cold-start retries if a scrape can't reach the schedule page |
+| `SCRAPE_RETRY_DELAY_SEC` | `30` | delay between scrape retries, in seconds |
 | `TZ` | `Asia/Jakarta` | timezone the BINUS timestamps use |
 | `DATA_DIR` | `./data` | where tokens/session/db live |
 

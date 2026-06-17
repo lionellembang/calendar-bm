@@ -43,6 +43,8 @@ const SCHEDULE_API_RE = /func-bm7-schedule-prod\.azurewebsites\.net\/api\/Schedu
 const CAPTURE_TIMEOUT_MS = 60000;
 const STEP_TIMEOUT_MS = 30000;
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function isPasswordSet() {
   return !!config.password && config.password !== 'PUT_YOUR_PASSWORD_HERE';
 }
@@ -64,6 +66,13 @@ function decodeJwtExp(token) {
 /**
  * Run the browser login + LMS schedule flow and capture the schedule request.
  * Writes schedule-request.json (+ tokens.json) and returns the request template.
+ *
+ * The flow is occasionally flaky — most often it can't make it onto the schedule
+ * page (the LMS tile / Schedule link doesn't take, or the Month-v1 POST never
+ * fires). When an attempt fails we throw away the whole browser and retry from a
+ * cold start (a brand-new browser + context) after a delay, up to
+ * config.scrapeMaxAttempts. The saved Microsoft session (binus-state.json) is
+ * still reused each time, so retries stay password-free.
  */
 async function grabScheduleRequest() {
   config.ensureDataDir();
@@ -75,13 +84,31 @@ async function grabScheduleRequest() {
     );
   }
 
-  const browser = await chromium.launch({ headless: !config.headful });
-  try {
-    return await capture(browser);
-  } finally {
-    await browser.close();
-    console.log('→ Browser closed.');
+  const attempts = Math.max(1, config.scrapeMaxAttempts);
+  const delayMs = Math.max(0, config.scrapeRetryDelaySec) * 1000;
+  let lastErr;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (attempt > 1) {
+      console.log(`↻ Cold-start retry ${attempt}/${attempts} in ${config.scrapeRetryDelaySec}s …`);
+      await sleep(delayMs);
+    }
+
+    const browser = await chromium.launch({ headless: !config.headful });
+    try {
+      return await capture(browser);
+    } catch (err) {
+      lastErr = err;
+      console.error(`✗ Scrape attempt ${attempt}/${attempts} failed: ${err.message}`);
+    } finally {
+      await browser.close();
+      console.log('→ Browser closed.');
+    }
   }
+
+  throw new Error(
+    `Scraper failed after ${attempts} attempt(s): ${lastErr ? lastErr.message : 'unknown error'}`
+  );
 }
 
 async function capture(browser) {
