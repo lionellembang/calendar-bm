@@ -179,6 +179,7 @@ docker compose exec calendar npm run sync            # run a one-off sync in the
 | `FEED_TOKEN` | — | secret path segment for the `.ics` URL |
 | `PORT` | `3000` | feed server port |
 | `CALENDAR_NAME` | `BINUS Schedule` | base display name; each feed appends its type (e.g. "… — Onsite") |
+| `REMINDER_MINUTES` | `30` | pop-up reminder before every event, in minutes (`0` disables) |
 | `SYNC_INTERVAL_MINUTES` | `360` | how often to refresh from the API, in minutes |
 | `MONTHS_BACK` / `MONTHS_AHEAD` | `1` / `2` | month window to fetch |
 | `SCRAPE_MAX_ATTEMPTS` | `3` | cold-start retries if a scrape can't reach the schedule page |

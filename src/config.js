@@ -40,6 +40,10 @@ const config = {
   port: int(process.env.PORT, 3000),
   calendarName: process.env.CALENDAR_NAME || 'BINUS Schedule',
 
+  // Pop-up reminder added to every event, in minutes before it starts.
+  // Set to 0 (or below) to disable reminders entirely.
+  reminderMinutes: int(process.env.REMINDER_MINUTES, 30),
+
   // Sync — how often to refresh from the API, in minutes (default: 6 hours)
   syncIntervalMinutes: int(process.env.SYNC_INTERVAL_MINUTES, 360),
   monthsBack: int(process.env.MONTHS_BACK, 1),

@@ -15,14 +15,20 @@ function buildCalendar(events, { name } = {}) {
     prodId: { company: 'calender-bm', product: 'binus-schedule', language: 'EN' },
   });
 
+  // A positive number of seconds means "before the event" (TRIGGER:-PT…).
+  const reminderSec = config.reminderMinutes > 0 ? config.reminderMinutes * 60 : null;
+
   for (const ev of events) {
-    cal.createEvent({
+    const event = cal.createEvent({
       id: ev.uid,
       start: ev.start,
       end: ev.end,
       summary: ev.summary,
       location: ev.location || undefined,
     });
+    if (reminderSec) {
+      event.createAlarm({ type: 'display', trigger: reminderSec, description: ev.summary });
+    }
   }
 
   return cal.toString();
