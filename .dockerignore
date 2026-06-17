@@ -1,0 +1,15 @@
+node_modules
+data/*
+.git
+.gitignore
+.env
+.env.example
+schedule-request.json
+tokens.json
+binus-state.json
+*.db
+*.sqlite*
+response.json
+README.md
+.DS_Store
+npm-debug.log*

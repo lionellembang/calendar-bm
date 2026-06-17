@@ -1,0 +1,26 @@
+{
+  "name": "calender-bm",
+  "version": "1.0.0",
+  "description": "Scrapes the BINUSMAYA schedule and serves it as an iCalendar (.ics) subscription feed.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "sync": "node -e \"require('./src/sync').runSync().then(()=>process.exit(0)).catch(e=>{console.error(e);process.exit(1)})\"",
+    "tokens": "node binusmaya-token.js",
+    "test:parse": "node scripts/test-parse.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ical-generator": "^8.0.1",
+    "luxon": "^3.5.0",
+    "playwright": "^1.61.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

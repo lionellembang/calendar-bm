@@ -1,0 +1,24 @@
+# Secrets & captured state — NEVER commit these
+.env
+schedule-request.json
+tokens.json
+binus-state.json
+
+# Local data (SQLite db lives here)
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Local test fixture — captured API response with real schedule data
+response.json
+
+# OS
+.DS_Store
+
+# Claude Code local config (personal allowlist also references the FEED_TOKEN)
+.claude/

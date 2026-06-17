@@ -1,0 +1,19 @@
+services:
+  calendar:
+    build: .
+    # Chromium (the scraper) needs these to run reliably in a container:
+    init: true # reap zombie Chromium child processes
+    shm_size: "1gb" # Chromium crashes with the default 64MB /dev/shm
+    env_file: .env
+    environment:
+      DATA_DIR: /app/data
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    volumes:
+      # Persistent state: schedule-request.json, tokens.json, saved MS session, SQLite db.
+      # All captured/created automatically by the scraper into this volume.
+      - calendar-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  calendar-data:
