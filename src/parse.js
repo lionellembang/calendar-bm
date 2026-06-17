@@ -2,21 +2,23 @@
  * Turn the BINUS schedule response (an array of day groups, each with a
  * Schedule[]) into a flat list of normalized, de-duplicated calendar events.
  *
- * Three kinds of entries, by scheduleType:
- *   - class    : Onsite / Virtual Class        → timed session
- *   - exam     : Onsite Exam / Online Exam     → timed exam
- *   - deadline : Assignment / Project          → due-date event (repeated daily
- *                in the source, so MUST be de-duplicated)
+ * We keep only timetabled sessions, classified by scheduleType:
+ *   - Online
+ *   - Onsite
+ *   - Virtual Class
+ * Anything else (Assignment, Project, Online/Onsite Exam, Event, …) is dropped
+ * and never stored. Each kept event uses only four source keys:
+ *   content    → summary (title)
+ *   dateStart  → start
+ *   dateEnd    → end
+ *   location   → location, falling back to locationValue when it's a URL (the
+ *                Zoom join link for online sessions). All other keys ignored.
  */
+const crypto = require('node:crypto');
 const { DateTime } = require('luxon');
 const config = require('./config');
 
-const CLASS_TYPES = new Set(['Onsite', 'Virtual Class']);
-const EXAM_TYPES = new Set(['Onsite Exam', 'Online Exam']);
-const DEADLINE_TYPES = new Set(['Assignment', 'Project']);
-
-// How long before the due time a deadline event should block out.
-const DEADLINE_LEAD_MIN = 15;
+const ALLOWED_TYPES = new Set(['Online', 'Onsite', 'Virtual Class']);
 
 function toUtc(naive, zone) {
   if (!naive) return null;
@@ -27,109 +29,54 @@ function toUtc(naive, zone) {
   return dt.isValid ? dt.toUTC().toJSDate() : null;
 }
 
-function classify(type) {
-  if (CLASS_TYPES.has(type)) return 'class';
-  if (EXAM_TYPES.has(type)) return 'exam';
-  if (DEADLINE_TYPES.has(type)) return 'deadline';
-  return 'class'; // default: treat unknown timed entries as a session
+function isUrl(v) {
+  return typeof v === 'string' && /^https?:\/\//i.test(v.trim());
 }
 
-function buildClass(e, cp, zone) {
-  const isVirtual = e.scheduleType === 'Virtual Class' || e.deliveryMode === 'VC';
-  const descParts = [
-    e.title && `Class: ${e.title}`,
-    cp.sessionNumber && `Session ${cp.sessionNumber}`,
-    e.deliveryModeDesc,
-  ].filter(Boolean);
-  return {
-    uid: cp.classSessionId || e.scheduleId,
-    kind: 'class',
-    summary: isVirtual ? `${e.content} (Online)` : e.content,
-    description: descParts.join('\n'),
-    location: isVirtual ? null : e.location,
-    start: toUtc(e.dateStart, zone),
-    end: toUtc(e.dateEnd, zone),
-    allDay: 0,
-    courseCode: cp.courseCode || null,
-  };
-}
-
-function buildExam(e, cp, zone) {
-  const component = cp.Component || e.assessmentActivity || e.scheduleType;
-  const location = e.location || cp.roomCode || cp.campus || null;
-  const descParts = [
-    e.title && `Class: ${e.title}`,
-    cp.seatNumber && `Seat: ${cp.seatNumber}`,
-    cp.time && `Time: ${cp.time}`,
-    cp.url && `Link: ${cp.url}`,
-  ].filter(Boolean);
-  return {
-    uid: `exam:${cp.courseCode || e.scheduleId}:${component}:${e.dateStart}`,
-    kind: 'exam',
-    summary: `${e.content} — ${component}`,
-    description: descParts.join('\n'),
-    location,
-    start: toUtc(e.dateStart, zone),
-    end: toUtc(e.dateEnd, zone),
-    allDay: 0,
-    courseCode: cp.courseCode || null,
-  };
-}
-
-function buildDeadline(e, cp, zone) {
-  const due = toUtc(cp.dueDate || e.dateEnd, zone);
-  if (!due) return null;
-  const start = new Date(due.getTime() - DEADLINE_LEAD_MIN * 60 * 1000);
-  const label = cp.title ? `${e.content} — ${cp.title}` : e.content;
-  const descParts = [
-    e.title && `Class: ${e.title}`,
-    e.assessmentActivity,
-  ].filter(Boolean);
-  return {
-    uid: `due:${cp.assessmentId || e.scheduleId}`,
-    kind: 'deadline',
-    summary: `Due: ${label}`,
-    description: descParts.join('\n'),
-    location: null,
-    start,
-    end: due,
-    allDay: 0,
-    courseCode: cp.courseCode || null,
-  };
+// Stable identity from the kept fields only, so the same session repeated across
+// day groups collapses to one event without relying on any ignored keys.
+function makeUid(scheduleType, summary, startIso, endIso, location) {
+  return crypto
+    .createHash('sha1')
+    .update([scheduleType, summary, startIso, endIso, location || ''].join('|'))
+    .digest('hex');
 }
 
 /**
  * @param {Array} dayGroups  raw API response (array of { dateStart, Schedule })
- * @param {object} [opts]    { includeDeadlines, timezone }
- * @returns {Array} normalized events, de-duplicated by uid
+ * @param {object} [opts]    { timezone }
+ * @returns {Array} normalized events, de-duplicated by uid, sorted by start
  */
 function parseSchedule(dayGroups, opts = {}) {
-  const includeDeadlines =
-    opts.includeDeadlines !== undefined ? opts.includeDeadlines : config.includeDeadlines;
   const zone = opts.timezone || config.timezone;
-
   const byUid = new Map();
 
   for (const group of dayGroups || []) {
     for (const e of group.Schedule || []) {
-      const cp = e.customParam || {};
-      const kind = classify(e.scheduleType);
+      if (!ALLOWED_TYPES.has(e.scheduleType)) continue;
 
-      if (kind === 'deadline' && !includeDeadlines) continue;
+      const summary = e.content;
+      if (!summary) continue;
 
-      let ev;
-      if (kind === 'exam') ev = buildExam(e, cp, zone);
-      else if (kind === 'deadline') ev = buildDeadline(e, cp, zone);
-      else ev = buildClass(e, cp, zone);
+      const start = toUtc(e.dateStart, zone);
+      const end = toUtc(e.dateEnd, zone);
+      if (!start || !end) continue;
 
-      if (!ev || !ev.uid || !ev.start || !ev.end) continue;
-      ev.raw = e;
+      const location = e.location || (isUrl(e.locationValue) ? e.locationValue.trim() : null);
+      const uid = makeUid(
+        e.scheduleType,
+        summary,
+        start.toISOString(),
+        end.toISOString(),
+        location
+      );
+
       // Last write wins; identical entries across months/days collapse here.
-      byUid.set(ev.uid, ev);
+      byUid.set(uid, { uid, scheduleType: e.scheduleType, summary, location, start, end });
     }
   }
 
   return [...byUid.values()].sort((a, b) => a.start - b.start);
 }
 
-module.exports = { parseSchedule };
+module.exports = { parseSchedule, ALLOWED_TYPES };

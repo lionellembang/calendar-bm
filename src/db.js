@@ -2,10 +2,14 @@
  * SQLite storage via Node's built-in `node:sqlite` (no native build needed;
  * requires Node >= 24). One `events` table + a tiny `meta` table. Single user →
  * each sync does a full replace inside a transaction so removed or rescheduled
- * classes disappear cleanly.
+ * sessions disappear cleanly.
  */
 const { DatabaseSync } = require('node:sqlite');
 const config = require('./config');
+
+// Bump when the `events` columns change; getDb() drops + recreates the table on
+// a mismatch. Safe because every event is re-derived from the API on next sync.
+const SCHEMA_VERSION = '2';
 
 let db;
 
@@ -15,24 +19,28 @@ function getDb() {
   db = new DatabaseSync(config.dbFile);
   db.exec('PRAGMA journal_mode = WAL');
   db.exec(`
-    CREATE TABLE IF NOT EXISTS events (
-      uid          TEXT PRIMARY KEY,
-      kind         TEXT NOT NULL,
-      summary      TEXT NOT NULL,
-      description  TEXT,
-      location     TEXT,
-      starts_at    TEXT NOT NULL,   -- ISO 8601 UTC
-      ends_at      TEXT NOT NULL,   -- ISO 8601 UTC
-      all_day      INTEGER NOT NULL DEFAULT 0,
-      course_code  TEXT,
-      raw_json     TEXT,
-      synced_at    TEXT NOT NULL
-    );
     CREATE TABLE IF NOT EXISTS meta (
       key   TEXT PRIMARY KEY,
       value TEXT
     );
   `);
+
+  // Migrate away from any older schema by recreating the events table.
+  if (getMeta('schema_version') !== SCHEMA_VERSION) {
+    db.exec('DROP TABLE IF EXISTS events');
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS events (
+      uid           TEXT PRIMARY KEY,
+      schedule_type TEXT NOT NULL,
+      summary       TEXT NOT NULL,
+      location      TEXT,
+      starts_at     TEXT NOT NULL,   -- ISO 8601 UTC
+      ends_at       TEXT NOT NULL,   -- ISO 8601 UTC
+      synced_at     TEXT NOT NULL
+    );
+  `);
+  setMeta('schema_version', SCHEMA_VERSION);
   return db;
 }
 
@@ -42,9 +50,9 @@ function replaceEvents(events) {
   const syncedAt = new Date().toISOString();
   const insert = d.prepare(`
     INSERT INTO events
-      (uid, kind, summary, description, location, starts_at, ends_at, all_day, course_code, raw_json, synced_at)
+      (uid, schedule_type, summary, location, starts_at, ends_at, synced_at)
     VALUES
-      (@uid, @kind, @summary, @description, @location, @starts_at, @ends_at, @all_day, @course_code, @raw_json, @synced_at)
+      (@uid, @schedule_type, @summary, @location, @starts_at, @ends_at, @synced_at)
   `);
 
   d.exec('BEGIN');
@@ -53,15 +61,11 @@ function replaceEvents(events) {
     for (const ev of events) {
       insert.run({
         uid: ev.uid,
-        kind: ev.kind,
+        schedule_type: ev.scheduleType,
         summary: ev.summary,
-        description: ev.description || null,
         location: ev.location || null,
         starts_at: ev.start.toISOString(),
         ends_at: ev.end.toISOString(),
-        all_day: ev.allDay ? 1 : 0,
-        course_code: ev.courseCode || null,
-        raw_json: ev.raw ? JSON.stringify(ev.raw) : null,
         synced_at: syncedAt,
       });
     }
@@ -75,20 +79,33 @@ function replaceEvents(events) {
   return events.length;
 }
 
-/** All events ordered by start time, as plain rows with Date objects. */
-function getEvents() {
-  const rows = getDb().prepare('SELECT * FROM events ORDER BY starts_at').all();
+/**
+ * Events ordered by start time, as plain rows with Date objects. Pass a
+ * scheduleType to return only that calendar's events.
+ */
+function getEvents(scheduleType) {
+  const d = getDb();
+  const rows = scheduleType
+    ? d
+        .prepare('SELECT * FROM events WHERE schedule_type = ? ORDER BY starts_at')
+        .all(scheduleType)
+    : d.prepare('SELECT * FROM events ORDER BY starts_at').all();
   return rows.map((r) => ({
     uid: r.uid,
-    kind: r.kind,
+    scheduleType: r.schedule_type,
     summary: r.summary,
-    description: r.description,
     location: r.location,
-    courseCode: r.course_code,
     start: new Date(r.starts_at),
     end: new Date(r.ends_at),
-    allDay: !!r.all_day,
   }));
+}
+
+/** Map of scheduleType → event count, for /healthz. */
+function countsByType() {
+  const rows = getDb()
+    .prepare('SELECT schedule_type, COUNT(*) AS n FROM events GROUP BY schedule_type')
+    .all();
+  return Object.fromEntries(rows.map((r) => [r.schedule_type, r.n]));
 }
 
 function setMeta(key, value) {
@@ -102,4 +119,4 @@ function getMeta(key) {
   return row ? row.value : null;
 }
 
-module.exports = { getDb, replaceEvents, getEvents, setMeta, getMeta };
+module.exports = { getDb, replaceEvents, getEvents, countsByType, setMeta, getMeta };

@@ -1,9 +1,10 @@
 # calender-bm — BINUSMAYA → calendar feed
 
-Turns your BINUSMAYA schedule into a live **iCalendar (`.ics`) subscription
-feed** you can add to Apple Calendar, Google Calendar, Outlook, etc. Classes,
-exams, and assignment/project deadlines show up automatically and refresh on a
-schedule.
+Turns your BINUSMAYA schedule into live **iCalendar (`.ics`) subscription
+feeds** you can add to Apple Calendar, Google Calendar, Outlook, etc. Each class
+type — **Onsite**, **Online**, and **Virtual Class** — is its own calendar with
+its own feed URL, so you can subscribe to whichever you want. They refresh on a
+schedule. (Exams, assignments, projects, and other entries are ignored.)
 
 Single-user, read-only, no native build dependencies.
 
@@ -15,10 +16,10 @@ every SYNC_INTERVAL_MINUTES
        ├─ request : reuse the captured schedule request, or re-capture it with
        │            the Playwright scraper (binusmaya-token.js) when the token is expired
        ├─ api     : replay the captured POST for a window of months
-       ├─ parse   : flatten + classify + de-duplicate + Asia/Jakarta → UTC
+       ├─ parse   : keep Onsite/Online/Virtual-Class + de-duplicate + Asia/Jakarta → UTC
        └─ db      : full-replace the event set in SQLite (node:sqlite)
 
-calendar client ──GET /calendar/<FEED_TOKEN>.ics──▶ server → ICS from SQLite
+calendar client ──GET /calendar/<FEED_TOKEN>/<type>.ics──▶ server → ICS from SQLite
 ```
 
 The scraper logs in cold (MS SSO), then reproduces the **exact click-path** a
@@ -43,7 +44,7 @@ since BINUSMAYA's post-login redirect occasionally stalls on the logged-out page
 | `src/config.js` | Reads `.env`; resolves data paths. |
 | `src/request.js` | `getValidRequest()` — read cached request template + refresh when the token expires. |
 | `src/api.js` | `fetchSchedule()` — replay the captured request per month. |
-| `src/parse.js` | `parseSchedule()` — normalize/classify/dedup events. |
+| `src/parse.js` | `parseSchedule()` — keep Onsite/Online/Virtual-Class, normalize/dedup. |
 | `src/db.js` | SQLite via built-in `node:sqlite`. |
 | `src/ics.js` | `buildCalendar()` — events → VCALENDAR. |
 | `src/sync.js` | Orchestrates one sync. |
@@ -87,18 +88,21 @@ HEADFUL=true node binusmaya-token.js
 npm start
 ```
 
-Then subscribe your calendar to:
+Then subscribe your calendar to whichever feeds you want (one per class type):
 
 ```
-http://<host>:<PORT>/calendar/<FEED_TOKEN>.ics
+http://<host>:<PORT>/calendar/<FEED_TOKEN>/onsite.ics
+http://<host>:<PORT>/calendar/<FEED_TOKEN>/online.ics
+http://<host>:<PORT>/calendar/<FEED_TOKEN>/virtual-class.ics
 ```
 
 In Apple/Google Calendar use "Subscribe to calendar" / "From URL". For automatic
 add, swap `http://` for `webcal://`.
 
 Useful endpoints:
-- `GET /healthz` — `{ ok, lastSync, eventCount }`
-- `GET /calendar/<FEED_TOKEN>.ics` — the feed (any other token → 404)
+- `GET /healthz` — `{ ok, lastSync, eventCount, counts }` (`counts` is per type)
+- `GET /calendar/<FEED_TOKEN>/<type>.ics` — a feed, where `<type>` is `onsite`,
+  `online`, or `virtual-class` (any other token/type → 404)
 
 Run a one-off sync without the server: `npm run sync`.
 
@@ -159,10 +163,9 @@ docker compose exec calendar npm run sync            # run a one-off sync in the
 | `HEADFUL` | `false` | `true` shows the browser (needed once for MFA) |
 | `FEED_TOKEN` | — | secret path segment for the `.ics` URL |
 | `PORT` | `3000` | feed server port |
-| `CALENDAR_NAME` | `BINUS Schedule` | display name in clients |
+| `CALENDAR_NAME` | `BINUS Schedule` | base display name; each feed appends its type (e.g. "… — Onsite") |
 | `SYNC_INTERVAL_MINUTES` | `360` | how often to refresh from the API, in minutes |
 | `MONTHS_BACK` / `MONTHS_AHEAD` | `1` / `2` | month window to fetch |
-| `INCLUDE_DEADLINES` | `true` | include assignment/project due dates |
 | `TZ` | `Asia/Jakarta` | timezone the BINUS timestamps use |
 | `DATA_DIR` | `./data` | where tokens/session/db live |
 

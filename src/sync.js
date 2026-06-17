@@ -18,7 +18,7 @@ async function runSync() {
 
   const events = parseSchedule(dayGroups);
   const counts = events.reduce((acc, e) => {
-    acc[e.kind] = (acc[e.kind] || 0) + 1;
+    acc[e.scheduleType] = (acc[e.scheduleType] || 0) + 1;
     return acc;
   }, {});
 

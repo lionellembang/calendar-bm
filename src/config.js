@@ -44,7 +44,6 @@ const config = {
   syncIntervalMinutes: int(process.env.SYNC_INTERVAL_MINUTES, 360),
   monthsBack: int(process.env.MONTHS_BACK, 1),
   monthsAhead: int(process.env.MONTHS_AHEAD, 2),
-  includeDeadlines: bool(process.env.INCLUDE_DEADLINES, true),
 
   // Timezone the BINUS naive timestamps are expressed in
   timezone: process.env.TZ || 'Asia/Jakarta',

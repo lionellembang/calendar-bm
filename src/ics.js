@@ -20,9 +20,7 @@ function buildCalendar(events, { name } = {}) {
       id: ev.uid,
       start: ev.start,
       end: ev.end,
-      allDay: !!ev.allDay,
       summary: ev.summary,
-      description: ev.description || undefined,
       location: ev.location || undefined,
     });
   }
