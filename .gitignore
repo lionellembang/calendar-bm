@@ -22,3 +22,8 @@ response.json
 
 # Claude Code local config (personal allowlist also references the FEED_TOKEN)
 .claude/
+
+response2.json
+.gitignore
+
+*.tar
