@@ -48,7 +48,8 @@ since BINUSMAYA's post-login redirect occasionally stalls on the logged-out page
 | `src/db.js` | SQLite via built-in `node:sqlite`. |
 | `src/ics.js` | `buildCalendar()` — events → VCALENDAR. |
 | `src/sync.js` | Orchestrates one sync. |
-| `src/server.js` | Express ICS feed + `/healthz`. |
+| `src/server.js` | Express: subscribe page + per-type ICS feeds + `/healthz`. |
+| `src/page.js` | `renderSubscribePage()` — the one-click subscribe HTML. |
 | `index.js` | Boots the server + interval scheduler + initial sync. |
 
 ## Requirements
@@ -88,7 +89,19 @@ HEADFUL=true node binusmaya-token.js
 npm start
 ```
 
-Then subscribe your calendar to whichever feeds you want (one per class type):
+Then open the **subscribe page** and use the one-click buttons:
+
+```
+http://<host>:<PORT>/calendar/<FEED_TOKEN>
+```
+
+It lists each calendar (Onsite / Online / Virtual Class) with a **Subscribe**
+button (opens Apple Calendar / Outlook via `webcal://`), an **Add to Google**
+button, and a **Copy link** button for any client that subscribes "from URL".
+The page is gated by the token, so the secret feed URLs never show on the public
+homepage.
+
+Prefer to wire it up by hand? The raw feeds are:
 
 ```
 http://<host>:<PORT>/calendar/<FEED_TOKEN>/onsite.ics
@@ -96,13 +109,12 @@ http://<host>:<PORT>/calendar/<FEED_TOKEN>/online.ics
 http://<host>:<PORT>/calendar/<FEED_TOKEN>/virtual-class.ics
 ```
 
-In Apple/Google Calendar use "Subscribe to calendar" / "From URL". For automatic
-add, swap `http://` for `webcal://`.
-
 Useful endpoints:
-- `GET /healthz` — `{ ok, lastSync, eventCount, counts }` (`counts` is per type)
+- `GET /` — public landing page (no secrets); points to the subscribe page.
+- `GET /calendar/<FEED_TOKEN>` — the one-click subscribe page (any other token → 404).
 - `GET /calendar/<FEED_TOKEN>/<type>.ics` — a feed, where `<type>` is `onsite`,
-  `online`, or `virtual-class` (any other token/type → 404)
+  `online`, or `virtual-class` (any other token/type → 404).
+- `GET /healthz` — `{ ok, lastSync, eventCount, counts }` (`counts` is per type).
 
 Run a one-off sync without the server: `npm run sync`.
 
