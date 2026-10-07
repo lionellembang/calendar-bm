@@ -6,8 +6,11 @@
   "scripts": {
     "start": "node index.js",
     "sync": "node -e \"require('./src/sync').runSync().then(()=>process.exit(0)).catch(e=>{console.error(e);process.exit(1)})\"",
-    "tokens": "node binusmaya-token.js",
-    "test:parse": "node scripts/test-parse.js"
+    "tokens": "node playwright/binusmaya-token.js",
+    "test:parse": "node scripts/test-parse.js",
+    "compose:pull": "bash scripts/pull_and_compose.sh",
+    "compose:up": "docker compose -f docker/docker-compose.yml up -d --build",
+    "compose:down": "docker compose -f docker/docker-compose.yml down -v"
   },
   "keywords": [],
   "author": "",

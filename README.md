@@ -14,7 +14,7 @@ Single-user, read-only, no native build dependencies.
 every SYNC_INTERVAL_MINUTES
   └─ sync
        ├─ request : reuse the captured schedule request, or re-capture it with
-       │            the Playwright scraper (binusmaya-token.js) when the token is expired
+       │            the Playwright scraper (playwright/binusmaya-token.js) when the token is expired
        ├─ api     : replay the captured POST for a window of months
        ├─ parse   : keep Onsite/Online/Virtual-Class + de-duplicate + Asia/Jakarta → UTC
        └─ db      : full-replace the event set in SQLite (node:sqlite)
@@ -43,7 +43,7 @@ waiting `SCRAPE_RETRY_DELAY_SEC` between tries.)
 
 | File | Role |
 |---|---|
-| `binusmaya-token.js` | Playwright scraper; cold login → click LMS tile → Schedule sidebar → captures the full schedule request. Exports `grabScheduleRequest()`, also runs as a CLI. |
+| `playwright/binusmaya-token.js` | Playwright scraper; cold login → click LMS tile → Schedule sidebar → captures the full schedule request. Exports `grabScheduleRequest()`, also runs as a CLI. |
 | `src/config.js` | Reads `.env`; resolves data paths. |
 | `src/request.js` | `getValidRequest()` — read cached request template + refresh when the token expires. |
 | `src/api.js` | `fetchSchedule()` — replay the captured request per month. |
@@ -53,6 +53,10 @@ waiting `SCRAPE_RETRY_DELAY_SEC` between tries.)
 | `src/sync.js` | Orchestrates one sync. |
 | `src/server.js` | Express: subscribe page + per-type ICS feeds + `/healthz`. |
 | `src/page.js` | `renderSubscribePage()` — the one-click subscribe HTML. |
+| `docker/Dockerfile` | Production container definition (Node 24 + Playwright/Chromium). |
+| `docker/docker-compose.yml` | Container orchestration & volume management. |
+| `scripts/pull_and_compose.sh` | Shell script to pull git updates and rebuild/relaunch containers. |
+| `scripts/test-parse.js` | Sanity check script for the response parser. |
 | `index.js` | Boots the server + interval scheduler + initial sync. |
 
 ## Requirements
@@ -86,7 +90,7 @@ the token has expired.
 
 ```bash
 # 1. First capture (interactive once, for MFA). Use a visible browser:
-HEADFUL=true node binusmaya-token.js
+HEADFUL=true node playwright/binusmaya-token.js
 
 # 2. Start the server (serves the feed + syncs on a schedule):
 npm start
@@ -130,11 +134,11 @@ all captured/created automatically.
 
 ```bash
 # Bootstrap the MS session once on the host (handles MFA) — writes to ./data:
-HEADFUL=true node binusmaya-token.js
+HEADFUL=true node playwright/binusmaya-token.js
 
-docker compose up -d                              # build (first run) + start
-docker compose cp ./data/. calendar:/app/data/    # seed the volume from the bootstrap
-docker compose restart                            # pick up the seeded state
+docker compose -f docker/docker-compose.yml up -d                              # build (first run) + start
+docker compose -f docker/docker-compose.yml cp ./data/. calendar:/app/data/    # seed the volume from the bootstrap
+docker compose -f docker/docker-compose.yml restart                            # pick up the seeded state
 ```
 
 - `.env` is loaded via `env_file`. Compose sets `shm_size: 1gb` and `init: true` so headless Chromium runs reliably.
@@ -150,24 +154,24 @@ docker compose restart                            # pick up the seeded state
 ### Useful commands
 
 ```bash
-docker compose build              # build the image only — don't start anything
-docker compose build --no-cache   # rebuild from scratch, ignore cached layers
-docker compose up -d              # start detached (builds on first run)
-docker compose up -d --build      # force a rebuild, then start
-docker compose ps                 # list containers + status
-docker compose logs -f            # follow logs (Ctrl-C stops watching, not the app)
-docker compose restart            # restart the container
-docker compose down               # stop + remove the container (keeps the volume)
-docker compose down -v            # also DELETE the calendar-data volume (wipes all state)
+docker compose -f docker/docker-compose.yml build              # build the image only — don't start anything
+docker compose -f docker/docker-compose.yml build --no-cache   # rebuild from scratch, ignore cached layers
+docker compose -f docker/docker-compose.yml up -d              # start detached (builds on first run)
+docker compose -f docker/docker-compose.yml up -d --build      # force a rebuild, then start
+docker compose -f docker/docker-compose.yml ps                 # list containers + status
+docker compose -f docker/docker-compose.yml logs -f            # follow logs (Ctrl-C stops watching, not the app)
+docker compose -f docker/docker-compose.yml restart            # restart the container
+docker compose -f docker/docker-compose.yml down               # stop + remove the container (keeps the volume)
+docker compose -f docker/docker-compose.yml down -v            # also DELETE the calendar-data volume (wipes all state)
 
 # Inspect / move state in the named volume (service name is "calendar"):
-docker compose exec calendar ls -la /app/data        # list state files (while running)
-docker compose cp ./file.json calendar:/app/data/    # copy a file INTO the volume
-docker compose cp calendar:/app/data/schedule.db ./  # copy a file OUT to the host
-docker volume ls                                     # find the volume (calender-bm_calendar-data)
-docker volume inspect calender-bm_calendar-data      # volume metadata
+docker compose -f docker/docker-compose.yml exec calendar ls -la /app/data        # list state files (while running)
+docker compose -f docker/docker-compose.yml cp ./file.json calendar:/app/data/    # copy a file INTO the volume
+docker compose -f docker/docker-compose.yml cp calendar:/app/data/schedule.db ./  # copy a file OUT to the host
+docker volume ls                                                                  # find the volume (calender-bm_calendar-data)
+docker volume inspect docker_calendar-data                                        # volume metadata
 
-docker compose exec calendar npm run sync            # run a one-off sync in the container
+docker compose -f docker/docker-compose.yml exec calendar npm run sync            # run a one-off sync in the container
 ```
 
 ## Config (`.env`)

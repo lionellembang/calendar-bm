@@ -28,14 +28,14 @@
  * because BINUS keeps it in an AES-encrypted redux-persist blob.
  *
  * Usage:
- *   - As a module:  const { grabScheduleRequest } = require('./binusmaya-token');
- *   - As a CLI:     node binusmaya-token.js
+ *   - As a module:  const { grabScheduleRequest } = require('./playwright/binusmaya-token');
+ *   - As a CLI:     node playwright/binusmaya-token.js
  * --------------------------------------------------------------------------
  */
 
 const { chromium } = require('playwright');
 const fs = require('fs');
-const config = require('./src/config');
+const config = require('../src/config');
 
 // The single request we want to capture.
 const SCHEDULE_API_RE = /func-bm7-schedule-prod\.azurewebsites\.net\/api\/Schedule\/Month-v1\//i;

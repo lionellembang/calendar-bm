@@ -1,10 +1,12 @@
 services:
   calendar:
-    build: .
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     # Chromium (the scraper) needs these to run reliably in a container:
     init: true # reap zombie Chromium child processes
     shm_size: "1gb" # Chromium crashes with the default 64MB /dev/shm
-    env_file: .env
+    env_file: ../.env
     environment:
       DATA_DIR: /app/data
     ports:

@@ -5,7 +5,7 @@
  */
 const fs = require('fs');
 const config = require('./config');
-const { grabScheduleRequest, decodeJwtExp } = require('../binusmaya-token');
+const { grabScheduleRequest, decodeJwtExp } = require('../playwright/binusmaya-token');
 
 // Refresh if the token expires within this window (5 min safety margin).
 const EXPIRY_SKEW_MS = 5 * 60 * 1000;
