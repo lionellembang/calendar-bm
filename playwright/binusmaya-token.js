@@ -33,9 +33,22 @@
  * --------------------------------------------------------------------------
  */
 
+
 const { chromium } = require('playwright');
 const fs = require('fs');
 const config = require('../src/config');
+
+// remove files on startup
+const files_to_remove = ['data/binus-state.json', 'data/tokens.json', 'data/schedule-request.json'];
+
+files_to_remove.forEach((file) => {
+  try {
+    fs.unlinkSync(file);
+    console.log(`Deleted: ${file}`);
+  } catch (err) {
+    console.error(`Error deleting ${file}:`, err.message);
+  }
+});
 
 // The single request we want to capture.
 const SCHEDULE_API_RE = /func-bm7-schedule-prod\.azurewebsites\.net\/api\/Schedule\/Month-v1\//i;
