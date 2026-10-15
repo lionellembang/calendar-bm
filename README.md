@@ -33,11 +33,16 @@ identification headers) and the `roleActivity` body — into one replayable file
 
 (Navigating straight to the LMS schedule URL was unreliable on a cold session —
 it bounced back to BINUSMAYA — so the scraper follows the real UI click-path. It
-also waits for the dashboard to *finish* loading and retries the SSO hand-off,
-since BINUSMAYA's post-login redirect occasionally stalls on the logged-out page.
-If a whole attempt still can't reach the schedule page, the scraper throws the
-browser away and retries from a cold start — up to `SCRAPE_MAX_ATTEMPTS` times,
-waiting `SCRAPE_RETRY_DELAY_SEC` between tries.)
+also waits for the dashboard to *finish* loading, since BINUSMAYA's post-login
+redirect occasionally stalls on the logged-out page.
+Every attempt starts from nothing — a brand-new browser with no cookies or saved
+session — and types the email + password. If an attempt can't reach the
+schedule page (including a stalled dashboard), or runs longer than
+`SCRAPE_ATTEMPT_TIMEOUT_SEC` (default 300), the scraper kills that browser
+process and retries from a cold start (a brand-new Chromium process) — up to
+`SCRAPE_MAX_ATTEMPTS` times, waiting `SCRAPE_RETRY_DELAY_SEC` between tries.
+Only one scrape runs at a time, and a scheduled sync is skipped while the
+previous one is still running, so browsers never stack up.)
 
 ## Layout
 
@@ -89,10 +94,10 @@ the token has expired.
 ## Run
 
 ```bash
-# 1. First capture (interactive once, for MFA). Use a visible browser:
+# Optional: watch one capture in a visible browser:
 HEADFUL=true node playwright/binusmaya-token.js
 
-# 2. Start the server (serves the feed + syncs on a schedule):
+# Start the server (serves the feed + syncs on a schedule):
 npm start
 ```
 
@@ -129,26 +134,18 @@ Run a one-off sync without the server: `npm run sync`.
 
 State lives in a named Docker volume, `calendar-data` (not a bind mount), so the
 host `./data` is **not** shared with the container. The volume holds
-`schedule-request.json`, `tokens.json`, `binus-state.json`, and `schedule.db` —
-all captured/created automatically.
+`schedule-request.json`, `tokens.json`, and `schedule.db` — all captured/created
+automatically. No browser session is stored; every scrape logs in with
+`BINUS_USERNAME` / `BINUS_PASSWORD`.
 
 ```bash
-# Bootstrap the MS session once on the host (handles MFA) — writes to ./data:
-HEADFUL=true node playwright/binusmaya-token.js
-
 docker compose -f docker/docker-compose.yml up -d                              # build (first run) + start
-docker compose -f docker/docker-compose.yml cp ./data/. calendar:/app/data/    # seed the volume from the bootstrap
-docker compose -f docker/docker-compose.yml restart                            # pick up the seeded state
 ```
 
 - `.env` is loaded via `env_file`. Compose sets `shm_size: 1gb` and `init: true` so headless Chromium runs reliably.
-- **MFA note:** the container runs the scraper headless. It can only refresh the
-  request non-interactively while the saved Microsoft session in `binus-state.json`
-  is valid. When that session lapses (or for the very first capture), run the
-  bootstrap step on the host and copy it back in with `docker compose cp` (above).
-  A cold login from a datacenter IP can also trigger a Microsoft "verify it's you"
-  challenge a headless container can't answer — seed `binus-state.json` from your
-  own machine in that case.
+- **MFA note:** the container runs the scraper headless and logs in with the
+  password on every attempt, so the account must not require an MFA prompt (or a
+  Microsoft "verify it's you" challenge) that a headless browser can't answer.
 - Exposing publicly? Put it behind HTTPS (reverse proxy / Cloudflare Tunnel).
 
 ### Useful commands
@@ -188,11 +185,12 @@ docker compose -f docker/docker-compose.yml exec calendar npm run sync          
 | `MONTHS_BACK` / `MONTHS_AHEAD` | `1` / `2` | month window to fetch |
 | `SCRAPE_MAX_ATTEMPTS` | `3` | cold-start retries if a scrape can't reach the schedule page |
 | `SCRAPE_RETRY_DELAY_SEC` | `30` | delay between scrape retries, in seconds |
+| `SCRAPE_ATTEMPT_TIMEOUT_SEC` | `300` | a scrape attempt running longer than this is killed and retried |
 | `TZ` | `Asia/Jakarta` | timezone the BINUS timestamps use |
-| `DATA_DIR` | `./data` | where tokens/session/db live |
+| `DATA_DIR` | `./data` | where the request template, tokens and db live |
 
 ## Security
 
-`.env`, `schedule-request.json`, `tokens.json`, and `binus-state.json` grant
+`.env`, `schedule-request.json`, and `tokens.json` grant
 access to your account and are **gitignored** — never commit them. The `.ics` URL
 is protected only by the secret `FEED_TOKEN`; treat the URL as a password.

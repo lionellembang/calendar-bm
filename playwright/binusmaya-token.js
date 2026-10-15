@@ -17,6 +17,11 @@
  * Navigating straight to the LMS schedule URL was unreliable on a cold session
  * (it bounced back to BINUSMAYA); following the UI click-path avoids that.
  *
+ * Every attempt starts from nothing: a brand-new Chromium process with an empty
+ * context (no cookies, no storage, no saved session), so it always walks the
+ * full Microsoft email + password login. Nothing from a previous attempt or run
+ * is reused.
+ *
  * It records the method, URL, every request header (including the fresh
  * `authorization` Bearer token and the identification headers), and the JSON
  * body — a self-contained, replayable "request template" written to
@@ -38,23 +43,12 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const config = require('../src/config');
 
-// remove files on startup
-const files_to_remove = ['data/binus-state.json', 'data/tokens.json', 'data/schedule-request.json'];
-
-files_to_remove.forEach((file) => {
-  try {
-    fs.unlinkSync(file);
-    console.log(`Deleted: ${file}`);
-  } catch (err) {
-    console.error(`Error deleting ${file}:`, err.message);
-  }
-});
-
 // The single request we want to capture.
 const SCHEDULE_API_RE = /func-bm7-schedule-prod\.azurewebsites\.net\/api\/Schedule\/Month-v1\//i;
 
 const CAPTURE_TIMEOUT_MS = 60000;
 const STEP_TIMEOUT_MS = 30000;
+const CLOSE_TIMEOUT_MS = 15000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -76,29 +70,93 @@ function decodeJwtExp(token) {
   }
 }
 
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, rej) => {
+    timer = setTimeout(() => rej(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Boot a brand-new Chromium process for one attempt. We go through
+ * launchServer() rather than launch() so we hold a handle on the actual OS
+ * process: its PID proves each attempt is a fresh process, and kill() lets us
+ * tear it down even when a graceful close hangs.
+ */
+async function launchColdBrowser(attempt) {
+  const server = await chromium.launchServer({ headless: !config.headful });
+  const pid = server.process().pid;
+  const browser = await chromium.connect(server.wsEndpoint());
+  console.log(`→ Attempt ${attempt}: launched a fresh Chromium (pid ${pid}).`);
+  return { server, browser, pid };
+}
+
+/**
+ * Close the attempt's browser and make sure its process is really gone:
+ * graceful close first, then SIGKILL the process group if it doesn't exit.
+ */
+async function shutdownBrowser({ server, browser, pid }) {
+  await withTimeout(browser.close(), CLOSE_TIMEOUT_MS, 'browser.close() timed out').catch((err) =>
+    console.error(`⚠ ${err.message}`)
+  );
+  try {
+    await withTimeout(server.close(), CLOSE_TIMEOUT_MS, 'graceful shutdown timed out');
+  } catch (err) {
+    console.error(`⚠ Chromium pid ${pid}: ${err.message} — killing it.`);
+    await server.kill();
+  }
+  if (isAlive(pid)) await server.kill();
+
+  if (isAlive(pid)) console.error(`⚠ Chromium pid ${pid} is still running after kill.`);
+  else console.log(`→ Browser closed (pid ${pid} exited).`);
+}
+
+// Only one scrape may run at a time; concurrent callers share the running one.
+let inFlight = null;
+
 /**
  * Run the browser login + LMS schedule flow and capture the schedule request.
  * Writes schedule-request.json (+ tokens.json) and returns the request template.
  *
  * The flow is occasionally flaky — most often it can't make it onto the schedule
  * page (the LMS tile / Schedule link doesn't take, or the Month-v1 POST never
- * fires). When an attempt fails we throw away the whole browser and retry from a
- * cold start (a brand-new browser + context) after a delay, up to
- * config.scrapeMaxAttempts. The saved Microsoft session (binus-state.json) is
- * still reused each time, so retries stay password-free.
+ * fires). When an attempt fails or exceeds config.scrapeAttemptTimeoutSec we kill
+ * the whole browser process and retry from a cold start (a brand-new Chromium
+ * process + empty context, full password login) after a delay, up to
+ * config.scrapeMaxAttempts.
  */
-async function grabScheduleRequest() {
+function grabScheduleRequest() {
+  if (inFlight) {
+    console.log('→ Scraper already running — waiting on it instead of launching another browser.');
+    return inFlight;
+  }
+  inFlight = runScraper().finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
+}
+
+async function runScraper() {
   config.ensureDataDir();
 
-  // A password is only required when there's no saved session to reuse.
-  if (!fs.existsSync(config.stateFile) && !isPasswordSet()) {
-    throw new Error(
-      'No saved session and no BINUS_PASSWORD set — set BINUS_PASSWORD in .env for the first login.'
-    );
+  // Every attempt logs in from scratch, so the credentials are always required.
+  if (!config.username || !isPasswordSet()) {
+    throw new Error('BINUS_USERNAME / BINUS_PASSWORD must be set in .env — every scrape logs in from scratch.');
   }
 
   const attempts = Math.max(1, config.scrapeMaxAttempts);
   const delayMs = Math.max(0, config.scrapeRetryDelaySec) * 1000;
+  const attemptTimeoutMs = Math.max(1, config.scrapeAttemptTimeoutSec) * 1000;
   let lastErr;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -107,15 +165,23 @@ async function grabScheduleRequest() {
       await sleep(delayMs);
     }
 
-    const browser = await chromium.launch({ headless: !config.headful });
+    let handle;
     try {
-      return await capture(browser);
+      handle = await launchColdBrowser(attempt);
+      // If the deadline wins, capture() keeps running until the browser is torn
+      // down below; swallow its late rejection so it can't crash the process.
+      const run = capture(handle.browser);
+      run.catch(() => {});
+      return await withTimeout(
+        run,
+        attemptTimeoutMs,
+        `attempt exceeded ${config.scrapeAttemptTimeoutSec}s`
+      );
     } catch (err) {
       lastErr = err;
       console.error(`✗ Scrape attempt ${attempt}/${attempts} failed: ${err.message}`);
     } finally {
-      await browser.close();
-      console.log('→ Browser closed.');
+      if (handle) await shutdownBrowser(handle);
     }
   }
 
@@ -125,8 +191,11 @@ async function grabScheduleRequest() {
 }
 
 async function capture(browser) {
-  const haveState = fs.existsSync(config.stateFile);
-  const context = await browser.newContext(haveState ? { storageState: config.stateFile } : {});
+  // Deliberately no storageState: the context starts empty every attempt.
+  const context = await browser.newContext();
+  const cookies = await context.cookies();
+  if (cookies.length) throw new Error(`New context unexpectedly has ${cookies.length} cookie(s).`);
+  console.log('→ Fresh browser context (0 cookies, no saved session).');
   const page = await context.newPage();
 
   // ---- 1. Capture the schedule request BEFORE it fires -------------------
@@ -175,9 +244,7 @@ async function capture(browser) {
     if (onRequest) context.off('request', onRequest);
   }
 
-  // ---- 5. Persist session + outputs --------------------------------------
-  await context.storageState({ path: config.stateFile });
-
+  // ---- 5. Persist outputs (the browser session itself is never saved) ----
   const auth = captured.headers['authorization'] || null;
   const template = {
     capturedAt: new Date().toISOString(),
@@ -211,14 +278,14 @@ async function capture(browser) {
 }
 
 /**
- * Logs in (when needed) and waits until the authenticated dashboard has fully
+ * Signs in from scratch and waits until the authenticated dashboard has fully
  * loaded — signalled by a *visible* "LMS" app tile. Returns that tile locator.
  *
  * BINUSMAYA's post-login OAuth code-exchange (…/home#code → /home → /) is
  * intermittently flaky: sometimes it never reaches the authenticated dashboard
  * and stalls on the logged-out /home. We treat "the dashboard finished loading"
- * as "the LMS tile is visible", and if that doesn't happen we re-trigger sign-in
- * (silent SSO via the saved Microsoft cookie — no password) and try again.
+ * as "the LMS tile is visible"; if that doesn't happen the attempt fails and the
+ * caller retries with a brand-new browser and a fresh password login.
  *
  * The dashboard renders its tiles in a carousel that clones slides, so several
  * `img[alt="LMS"]` exist but only one is on-screen — `:visible` avoids waiting
@@ -227,38 +294,24 @@ async function capture(browser) {
 async function reachDashboard(page) {
   const lmsTile = page.locator('img[alt="LMS"]:visible').first();
 
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    await page.goto('https://binusmaya.binus.ac.id/', { waitUntil: 'load' });
-    await page.waitForLoadState('networkidle').catch(() => {});
+  await page.goto('https://binusmaya.binus.ac.id/', { waitUntil: 'load' });
+  await page.waitForLoadState('networkidle').catch(() => {});
 
-    // Already on the authenticated dashboard? (e.g. a warm app session)
-    if (await lmsTile.isVisible().catch(() => false)) return lmsTile;
+  console.log('→ Signing in via Microsoft …');
+  const signInBtn = page.getByRole('button', { name: /Sign in with Microsoft/i });
+  await signInBtn.waitFor({ timeout: STEP_TIMEOUT_MS });
+  await signInBtn.click();
+  await doMicrosoftLogin(page);
 
-    // Otherwise sign in (cold = password; warm MS cookie = silent SSO).
-    const signInBtn = page.getByRole('button', { name: /Sign in with Microsoft/i });
-    const haveSignIn = await signInBtn
-      .waitFor({ timeout: 10000 })
-      .then(() => true)
-      .catch(() => false);
-    if (haveSignIn) {
-      console.log(`→ Signing in via Microsoft (attempt ${attempt}) …`);
-      await signInBtn.click();
-      await doMicrosoftLogin(page);
-    }
-
-    // Wait for the dashboard to FINISH loading (tile visible), riding out the
-    // /home#code → / routing.
-    console.log('→ Waiting for the dashboard to finish loading …');
-    const ok = await lmsTile
-      .waitFor({ timeout: 45000 })
-      .then(() => true)
-      .catch(() => false);
-    if (ok) return lmsTile;
-
-    console.log('→ Dashboard stalled on /home — retrying the SSO hand-off …');
-  }
-
-  throw new Error('Could not reach the authenticated BINUSMAYA dashboard (SSO kept stalling on /home).');
+  // Wait for the dashboard to FINISH loading (tile visible), riding out the
+  // /home#code → / routing.
+  console.log('→ Waiting for the dashboard to finish loading …');
+  const ok = await lmsTile
+    .waitFor({ timeout: 45000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!ok) throw new Error('Dashboard stalled on /home after sign-in.');
+  return lmsTile;
 }
 
 /**
@@ -287,30 +340,14 @@ async function openSchedule(page, context, lmsTile) {
  * Walks the Microsoft Entra sign-in pages. Microsoft uses #idSIButton9 as the
  * primary button on every step, so each stage is: fill field → click that button.
  *
- * When a saved Microsoft session is still alive, clicking "Sign in with Microsoft"
- * redirects straight back to BINUSMAYA without ever showing the email form
- * (silent SSO). We detect that and skip the credential steps — so a reused
- * session refreshes the token without a password.
+ * The context is always empty, so the email form must appear; if Microsoft
+ * skips it (silent SSO), something leaked session state and we fail the attempt.
  */
 async function doMicrosoftLogin(page) {
   const email = page.locator('input[type="email"]');
-  try {
-    await email.waitFor({ timeout: 12000 });
-  } catch {
-    // No email prompt: either silent SSO already bounced us back, or it will.
-    if (/binusmaya\.binus\.ac\.id/.test(page.url())) {
-      console.log('→ Silent SSO (no password prompt needed).');
-      return;
-    }
-    await page.waitForURL(/binusmaya\.binus\.ac\.id/, { timeout: 20000 });
-    console.log('→ Silent SSO (no password prompt needed).');
-    return;
-  }
-
-  // The email form is up — this is a cold login, so we need the password.
-  if (!isPasswordSet()) {
-    throw new Error('Microsoft login is required but BINUS_PASSWORD is not set in .env.');
-  }
+  await email.waitFor({ timeout: STEP_TIMEOUT_MS }).catch(() => {
+    throw new Error(`Microsoft email prompt never appeared (at ${page.url()}) — expected a fresh login.`);
+  });
 
   await email.fill(config.username);
   await page.locator('#idSIButton9, input[type=submit]').first().click();
@@ -320,7 +357,7 @@ async function doMicrosoftLogin(page) {
   await pwd.fill(config.password);
   await page.locator('#idSIButton9, input[type=submit]').first().click();
 
-  // "Stay signed in?" — click Yes if it appears (keeps the session longer).
+  // "Stay signed in?" — answer it if it appears (the session is discarded anyway).
   try {
     await page.locator('#idSIButton9').waitFor({ timeout: 8000 });
     await page.locator('#idSIButton9').click();

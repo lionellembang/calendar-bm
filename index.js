@@ -6,12 +6,23 @@ const config = require('./src/config');
 const { startServer } = require('./src/server');
 const { runSync } = require('./src/sync');
 
+// A sync (especially one that has to scrape) can outlast the interval; never
+// stack a second one on top of it.
+let syncing = false;
+
 async function safeSync(reason) {
+  if (syncing) {
+    console.log(`(sync trigger: ${reason}) skipped — previous sync still running`);
+    return;
+  }
+  syncing = true;
   try {
     console.log(`(sync trigger: ${reason})`);
     await runSync();
   } catch (err) {
     console.error('✗ sync failed:', err.message);
+  } finally {
+    syncing = false;
   }
 }
 

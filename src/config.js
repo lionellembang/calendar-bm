@@ -27,7 +27,6 @@ const config = {
   // Files that persist across runs (kept in the data dir / mounted volume)
   requestFile: path.join(dataDir, 'schedule-request.json'), // full replayable request
   tokensFile: path.join(dataDir, 'tokens.json'),
-  stateFile: path.join(dataDir, 'binus-state.json'),
   dbFile: path.join(dataDir, 'schedule.db'),
 
   // BINUSMAYA login (for the scraper)
@@ -50,10 +49,12 @@ const config = {
   monthsAhead: int(process.env.MONTHS_AHEAD, 2),
 
   // Scraper resilience — if a grab fails (e.g. it can't reach the schedule
-  // page), relaunch the whole flow from a cold start, up to this many attempts,
+  // page) or runs longer than the per-attempt timeout, kill the browser and
+  // relaunch the whole flow from a cold start, up to this many attempts,
   // waiting this many seconds between tries.
   scrapeMaxAttempts: int(process.env.SCRAPE_MAX_ATTEMPTS, 3),
   scrapeRetryDelaySec: int(process.env.SCRAPE_RETRY_DELAY_SEC, 30),
+  scrapeAttemptTimeoutSec: int(process.env.SCRAPE_ATTEMPT_TIMEOUT_SEC, 300),
 
   // Timezone the BINUS naive timestamps are expressed in
   timezone: process.env.TZ || 'Asia/Jakarta',
@@ -68,7 +69,6 @@ function ensureDataDir() {
   fs.mkdirSync(config.dataDir, { recursive: true });
   const legacy = [
     [path.join(ROOT, 'tokens.json'), config.tokensFile],
-    [path.join(ROOT, 'binus-state.json'), config.stateFile],
     [path.join(ROOT, 'schedule-request.json'), config.requestFile],
   ];
   for (const [from, to] of legacy) {

@@ -1,14 +1,13 @@
 /**
  * Schedule-request lifecycle: read the captured request template and refresh it
- * via the Playwright scraper when the embedded `authorization` token is missing
- * or about to expire. Re-scraping rewrites the whole template with a fresh token.
+ * via the Playwright scraper only when the embedded `authorization` token is
+ * missing or past its expiry. (A token the API rejects early is handled by the
+ * 401 retry in src/sync.js.) Re-scraping rewrites the whole template with a
+ * fresh token.
  */
 const fs = require('fs');
 const config = require('./config');
 const { grabScheduleRequest, decodeJwtExp } = require('../playwright/binusmaya-token');
-
-// Refresh if the token expires within this window (5 min safety margin).
-const EXPIRY_SKEW_MS = 5 * 60 * 1000;
 
 function readTemplate() {
   try {
@@ -32,8 +31,8 @@ function expiresAt(tpl) {
 function isExpired(tpl) {
   if (!tpl || !tpl.headers || !tpl.headers.authorization) return true;
   const exp = expiresAt(tpl);
-  if (exp === null || Number.isNaN(exp)) return false; // unknown expiry → trust it
-  return exp - Date.now() <= EXPIRY_SKEW_MS;
+  if (exp === null || Number.isNaN(exp)) return false; // unknown expiry → trust it until a 401
+  return exp <= Date.now();
 }
 
 /**
@@ -44,7 +43,7 @@ async function getValidRequest({ force = false } = {}) {
   config.ensureDataDir();
   let tpl = readTemplate();
   if (force || isExpired(tpl)) {
-    console.log('→ Request template missing/expired — running scraper …');
+    console.log(force ? '→ Forcing a new login …' : '→ Request template missing/expired — running scraper …');
     tpl = await grabScheduleRequest();
   } else {
     console.log(`→ Using cached request (token expires ${tpl.authorizationExpiresAt}).`);

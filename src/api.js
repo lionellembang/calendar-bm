@@ -5,7 +5,7 @@
  * The template carries the method, a {year}-{month} URL template, all headers
  * (including the Authorization JWT + identification headers) and the roleActivity
  * body. We swap the month into the URL and re-send headers + body. Only the token
- * goes stale (~24h) — refreshing is handled in src/request.js.
+ * goes stale (~24h) — refreshing is handled in src/request.js and src/sync.js.
  */
 const { DateTime } = require('luxon');
 const config = require('./config');
@@ -37,7 +37,9 @@ async function fetchMonth(template, date) {
   const text = await res.text();
 
   if (res.status === 401) {
-    throw new Error('401 Unauthorized — the authorization token has expired.');
+    const err = new Error('401 Unauthorized — the authorization token was rejected.');
+    err.unauthorized = true;
+    throw err;
   }
   if (!res.ok) {
     throw new Error(
